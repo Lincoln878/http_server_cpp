@@ -2,6 +2,8 @@
 
 #include <iostream>
 #include <sstream>
+#include <thread>
+#include <functional>
 #include <unistd.h>
 
 const unsigned int BUFFER_SIZE = 1024;
@@ -19,11 +21,11 @@ namespace {
 namespace http {
     Server::Server(std::string ip_address, int port):
         m_ip_address(ip_address), m_port(port), m_socket(),
-        m_new_socket(), m_incomingMessage(), m_socketAddress(),
+        m_incomingMessage(), m_socketAddress(),
         m_socketAddress_len(sizeof(m_socketAddress)),
         m_serverMessage()
     {
-
+        m_socketAddress.sin_family = AF_INET;
         m_socketAddress.sin_addr.s_addr = inet_addr(m_ip_address.c_str());
         m_socketAddress.sin_port = htons(port);
         startServer();
@@ -50,7 +52,6 @@ namespace http {
 
     void Server::closeServer() {
         close(m_socket);
-        close(m_new_socket);
         exit(0);
     }
 
@@ -62,31 +63,17 @@ namespace http {
         std::ostringstream ss;
         ss<<"\n*** Listening on: "<<inet_ntoa(m_socketAddress.sin_addr)<<":"<<ntohs(m_socketAddress.sin_port)<<" ***\n\n";
         log(ss.str());
-
-        int bytesReceived;
         
+        int new_socket;
+
         while (1) {
             log("===== Waiting for connection =====\n");
-            acceptConnection(m_new_socket);
+            acceptConnection(new_socket);
 
-            char buffer[BUFFER_SIZE] = {0};
-            bytesReceived = read(m_new_socket, buffer, BUFFER_SIZE);
-            if (bytesReceived<0) {
-                exitWithError("Failied to read bytes from client socket connection");
-            }
-
-            ss.clear();
-            ss<<"----- Received request from client -----\n";
-            log(ss.str());
-
-            std::string type, content, response;
-            type = "application/json";
-            content = "{\"content\": 123}";
-            response = buildResponse(type, content);
-            setResponse(response);
-
-            sendResponse();
-            close(m_new_socket);
+            std::thread newThread([this, new_socket]() {
+                handleConnection(new_socket);
+            });
+            newThread.detach();
         }
     }
 
@@ -99,6 +86,31 @@ namespace http {
         }
     }
 
+    void Server::handleConnection(int client_socket) {
+        std::ostringstream ss;
+        char buffer[BUFFER_SIZE] = {0};
+        int bytesReceived;
+
+        bytesReceived = read(client_socket, buffer, BUFFER_SIZE);
+        if (bytesReceived<0) {
+            exitWithError("Failied to read bytes from client socket connection");
+        }
+
+        sleep(2);
+
+        ss<<"----- Received request from client -----\n";
+        log(ss.str());
+
+        std::string type, content, response;
+        type = "application/json";
+        content = "{\"content\": 123}";
+        response = buildResponse(type, content);
+        setResponse(response);
+
+        sendResponse(client_socket);
+        close(client_socket);
+    }
+
     std::string Server::buildResponse(std::string &type, std::string &content) {
         std::string header;
         header = "HTTP/1.1 200 OK\nContent-Type: "+type+"\nContent-Length: "+std::to_string(content.size())+"\n\n";
@@ -109,10 +121,10 @@ namespace http {
         m_serverMessage = response;
     }
 
-    void Server::sendResponse() {
+    void Server::sendResponse(int client_socket) {
         long bytesSent;
 
-        bytesSent = write(m_new_socket, m_serverMessage.c_str(), m_serverMessage.size());
+        bytesSent = write(client_socket, m_serverMessage.c_str(), m_serverMessage.size());
 
         if (bytesSent==m_serverMessage.size()) {
             log("----- Server response sent to client -----\n");

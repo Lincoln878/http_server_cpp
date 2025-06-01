@@ -2,7 +2,7 @@
 
 int main() {
 
-    http::Server server = http::Server("127.0.0.1", 8080);
+    http::Server server = http::Server("0.0.0.0", 8080);
 
     server.startListen();
 
